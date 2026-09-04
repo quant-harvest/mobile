@@ -55,14 +55,14 @@ export const SettingsModal: React.FC<Props> = ({ visible, config, onClose, onSav
               style={styles.input}
               value={serverUrl}
               onChangeText={setServerUrl}
-              placeholder="https://127.0.0.1:8443"
+              placeholder="http://192.168.1.85:8444"
               placeholderTextColor="#484f58"
               autoCapitalize="none"
               autoCorrect={false}
             />
             <Text style={styles.helpText}>
-              • iOS Simulator: https://127.0.0.1:8443{'\n'}
-              • Pixel (Wi-Fi): https://192.168.x.x:8443 or Tailscale IP
+              • Pixel (Wi-Fi): http://192.168.1.85:8444{'\n'}
+              • iOS Simulator: http://localhost:8444 or Tailscale IP
             </Text>
           </View>
 

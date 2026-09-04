@@ -6,7 +6,8 @@ const STORAGE_KEY_API_KEY = '@waveskimmer_api_key';
 const STORAGE_KEY_REFRESH = '@waveskimmer_refresh_interval';
 
 export const DEFAULT_CONFIG: AppConfig = {
-  serverUrl: 'https://192.168.1.85:8443',
+  // Uses plain HTTP port 8444 on your Mac's Wi-Fi IP to avoid mobile self-signed SSL cert rejections
+  serverUrl: 'http://192.168.1.85:8444',
   apiKey: '',
   autoRefreshIntervalSec: 15,
 };
