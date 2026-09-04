@@ -6,8 +6,7 @@ const STORAGE_KEY_API_KEY = '@waveskimmer_api_key';
 const STORAGE_KEY_REFRESH = '@waveskimmer_refresh_interval';
 
 export const DEFAULT_CONFIG: AppConfig = {
-  // Default to localhost for simulator; users on Pixel can set LAN IP or Tailscale IP in Settings
-  serverUrl: 'https://127.0.0.1:8443',
+  serverUrl: 'https://192.168.1.85:8443',
   apiKey: '',
   autoRefreshIntervalSec: 15,
 };

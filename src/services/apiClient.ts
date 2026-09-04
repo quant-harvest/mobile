@@ -1,4 +1,4 @@
-import { PortfolioYieldSummary, SchwabAccountOption } from '../types/portfolio';
+import { PortfolioYieldSummary, HoldingYieldSummary, SchwabAccountOption } from '../types/portfolio';
 
 export interface ApiClientConfig {
   baseUrl: string;
@@ -27,13 +27,13 @@ export class ApiClient {
   }
 
   async fetchPortfolioYieldSummary(accountFilter?: string): Promise<PortfolioYieldSummary> {
-    let url = `${this.baseUrl}/api/portfolio/yield-summary`;
+    let url = `${this.baseUrl}/api/dividends/summary`;
     if (accountFilter && accountFilter !== 'ALL') {
       url += `?account=${encodeURIComponent(accountFilter)}`;
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
 
     try {
       const response = await fetch(url, {
@@ -43,11 +43,57 @@ export class ApiClient {
       });
 
       if (!response.ok) {
-        throw new Error(`Server returned HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const data: PortfolioYieldSummary = await response.json();
-      return data;
+      const raw = await response.json();
+
+      // Normalize fields to ensure compatibility
+      const holdings: HoldingYieldSummary[] = (raw.holdings || []).map((h: any) => ({
+        symbol: h.symbol || '',
+        description: h.description || '',
+        accountNumber: h.accountNumber || '',
+        shares: Number(h.shares) || 0,
+        currentPrice: Number(h.currentPrice) || 0,
+        costBasisPerShare: Number(h.costBasisPerShare) || 0,
+        totalCostBasis: Number(h.totalCostBasis) || 0,
+        marketValue: Number(h.marketValue) || 0,
+        unrealizedPnL: Number(h.unrealizedPnL) || 0,
+        unrealizedPnLPct: Number(h.unrealizedPnLPct) || 0,
+        totalDividends: Number(h.totalDividends) || 0,
+        dividendCount: Number(h.dividendCount) || 0,
+        optionPremiumHarvested: Number(h.optionPremiumHarvested) || 0,
+        totalIncome: Number(h.totalIncome) || 0,
+        effectiveCostBasisPerShare: Number(h.effectiveCostBasisPerShare) || 0,
+        yieldOnCost: Number(h.yieldOnCostPct ?? h.yieldOnCost ?? 0),
+        netTotalReturn: Number(h.netTotalReturnDollar ?? h.netTotalReturn ?? 0),
+        netTotalReturnPct: Number(h.netTotalReturnPct) || 0,
+      }));
+
+      const totalCostBasis = Number(raw.totalCostBasis) || 0;
+      const totalMarketValue = Number(raw.totalMarketValue) || 0;
+      const totalUnrealizedPnL = Number(raw.unrealizedPricePnL ?? raw.totalUnrealizedPnL ?? 0);
+      const totalUnrealizedPnLPct = totalCostBasis > 0 ? (totalUnrealizedPnL / totalCostBasis) * 100 : 0;
+      const totalDividends = Number(raw.totalDividendsCollected ?? raw.totalDividends ?? 0);
+      const totalOptionPremium = Number(raw.totalOptionPremiumCollected ?? raw.totalOptionPremium ?? 0);
+      const totalIncome = Number(raw.totalIncomeCollected ?? raw.totalIncome ?? 0);
+      const portfolioYieldOnCost = Number(raw.aggregateYieldOnCostPct ?? raw.portfolioYieldOnCost ?? 0);
+      const netTotalReturn = Number(raw.netTotalReturnDollar ?? raw.netTotalReturn ?? 0);
+      const netTotalReturnPct = Number(raw.netTotalReturnPct) || 0;
+
+      return {
+        totalMarketValue,
+        totalCostBasis,
+        totalUnrealizedPnL,
+        totalUnrealizedPnLPct,
+        totalDividends,
+        totalOptionPremium,
+        totalIncome,
+        portfolioYieldOnCost,
+        netTotalReturn,
+        netTotalReturnPct,
+        holdings,
+      };
     } finally {
       clearTimeout(timeoutId);
     }
@@ -73,25 +119,6 @@ export class ApiClient {
       return accounts;
     } catch {
       return [];
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  async syncDividends(): Promise<{ success: boolean; syncedCount?: number; error?: string }> {
-    const url = `${this.baseUrl}/api/dividends/sync-schwab`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 25000);
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        signal: controller.signal,
-      });
-
-      const json = await response.json();
-      return json;
     } finally {
       clearTimeout(timeoutId);
     }
