@@ -1,4 +1,5 @@
 import { PortfolioYieldSummary, HoldingYieldSummary, SchwabAccountOption } from '../types/portfolio';
+import { StagedReentryOrder } from '../types/orders';
 
 export interface ApiClientConfig {
   baseUrl: string;
@@ -123,4 +124,80 @@ export class ApiClient {
       clearTimeout(timeoutId);
     }
   }
+
+  async fetchStagedReentries(): Promise<StagedReentryOrder[]> {
+    const url = `${this.baseUrl}/api/reentry/staged`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const list: StagedReentryOrder[] = await response.json();
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async executeStagedReentry(order: StagedReentryOrder): Promise<{ success: boolean; message?: string }> {
+    const url = `${this.baseUrl}/api/reentry/execute`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          id: order.id,
+          accountNumber: order.accountNumber,
+          symbol: order.symbol,
+          instruction: order.instruction,
+          quantity: order.quantity,
+          stopPrice: order.suggestedStop,
+        }),
+        signal: controller.signal,
+      });
+
+      const data = await response.json();
+      return { success: response.ok && Boolean(data?.success), message: data?.message || data?.error };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Execution request failed' };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async dismissStagedReentry(id: string): Promise<{ success: boolean }> {
+    const url = `${this.baseUrl}/api/reentry/dismiss?id=${encodeURIComponent(id)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+
+      const data = await response.json();
+      return { success: response.ok && Boolean(data?.success) };
+    } catch {
+      return { success: false };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 }
+

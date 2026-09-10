@@ -19,12 +19,16 @@ import { AccountFilterPills } from '../components/AccountFilterPills';
 import { PositionCard } from '../components/PositionCard';
 import { PositionDetailModal } from './PositionDetailModal';
 import { SettingsModal } from './SettingsModal';
+import { StagedReentryOrder } from '../types/orders';
+import { StagedTradeApprovalCard } from '../components/StagedTradeApprovalCard';
 
 export const PositionsScreen: React.FC = () => {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [accounts, setAccounts] = useState<SchwabAccountOption[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<string>('ALL');
   const [summary, setSummary] = useState<PortfolioYieldSummary | null>(null);
+  const [stagedOrders, setStagedOrders] = useState<StagedReentryOrder[]>([]);
+  const [statusNotification, setStatusNotification] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -35,6 +39,7 @@ export const PositionsScreen: React.FC = () => {
 
   const apiClientRef = useRef<ApiClient | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const stagedTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize Config & API Client
   useEffect(() => {
@@ -121,6 +126,64 @@ export const PositionsScreen: React.FC = () => {
     });
     setLoading(true);
     fetchData(updated);
+    fetchStagedOrders();
+  };
+
+  const fetchStagedOrders = useCallback(async () => {
+    const client = apiClientRef.current;
+    if (!client) return;
+    try {
+      const list = await client.fetchStagedReentries();
+      setStagedOrders(list);
+    } catch {
+      // silent
+    }
+  }, []);
+
+  // Poll staged orders every 4 seconds for immediate prompt display
+  useEffect(() => {
+    if (!config) return;
+    fetchStagedOrders();
+    if (stagedTimerRef.current) clearInterval(stagedTimerRef.current);
+    stagedTimerRef.current = setInterval(() => {
+      fetchStagedOrders();
+    }, 4000);
+
+    return () => {
+      if (stagedTimerRef.current) clearInterval(stagedTimerRef.current);
+    };
+  }, [config, fetchStagedOrders]);
+
+  const handleApproveStaged = async (order: StagedReentryOrder) => {
+    const client = apiClientRef.current;
+    if (!client) return;
+    setStagedOrders(prev => prev.filter(o => o.id !== order.id));
+    setStatusNotification(`🚀 Executing ${order.instruction} x${order.quantity} ${order.symbol}...`);
+    try {
+      const res = await client.executeStagedReentry(order);
+      if (res.success) {
+        setStatusNotification(`✅ Order Executed: ${order.instruction} x${order.quantity} ${order.symbol}`);
+        fetchData();
+      } else {
+        setStatusNotification(`⚠️ Order placement: ${res.message || 'Submitted'}`);
+      }
+    } catch (err: any) {
+      setStatusNotification(`⚠️ Execution error: ${err?.message || 'Failed'}`);
+    }
+    setTimeout(() => setStatusNotification(null), 5000);
+  };
+
+  const handleRejectStaged = async (order: StagedReentryOrder) => {
+    const client = apiClientRef.current;
+    if (!client) return;
+    setStagedOrders(prev => prev.filter(o => o.id !== order.id));
+    setStatusNotification(`🛑 Vetoed: ${order.instruction} on ${order.underlying} dismissed`);
+    try {
+      await client.dismissStagedReentry(order.id);
+    } catch {
+      // silent
+    }
+    setTimeout(() => setStatusNotification(null), 4000);
   };
 
   // Filter Holdings by search query
@@ -165,6 +228,24 @@ export const PositionsScreen: React.FC = () => {
           clearButtonMode="while-editing"
         />
       </View>
+
+      {/* Pinned Real-time Trade Candidate Approvals (In Your Face Yes/No) */}
+      {stagedOrders.map((order) => (
+        <StagedTradeApprovalCard
+          key={order.id}
+          order={order}
+          timeoutSec={30}
+          onApprove={handleApproveStaged}
+          onReject={handleRejectStaged}
+        />
+      ))}
+
+      {/* Execution / Veto Notification Toast Banner */}
+      {statusNotification ? (
+        <View style={styles.statusNotificationBanner}>
+          <Text style={styles.statusNotificationText}>{statusNotification}</Text>
+        </View>
+      ) : null}
 
       {/* Error Alert Banner */}
       {errorMsg ? (
@@ -303,6 +384,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     borderWidth: 1,
     borderColor: '#30363d',
+  },
+  statusNotificationBanner: {
+    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.4)',
+    borderRadius: 8,
+    marginHorizontal: 16,
+    marginVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  statusNotificationText: {
+    color: '#38bdf8',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   errorBanner: {
     backgroundColor: 'rgba(242,54,69,0.15)',
