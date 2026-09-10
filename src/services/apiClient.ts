@@ -73,6 +73,8 @@ export class ApiClient {
 
       const totalCostBasis = Number(raw.totalCostBasis) || 0;
       const totalMarketValue = Number(raw.totalMarketValue) || 0;
+      const totalLiquidationValue = Number(raw.totalLiquidationValue) || 0;
+      const totalCash = Number(raw.totalCash) || 0;
       const totalUnrealizedPnL = Number(raw.unrealizedPricePnL ?? raw.totalUnrealizedPnL ?? 0);
       const totalUnrealizedPnLPct = totalCostBasis > 0 ? (totalUnrealizedPnL / totalCostBasis) * 100 : 0;
       const totalDividends = Number(raw.totalDividendsCollected ?? raw.totalDividends ?? 0);
@@ -84,6 +86,8 @@ export class ApiClient {
 
       return {
         totalMarketValue,
+        totalLiquidationValue,
+        totalCash,
         totalCostBasis,
         totalUnrealizedPnL,
         totalUnrealizedPnLPct,
@@ -101,7 +105,7 @@ export class ApiClient {
   }
 
   async fetchAccounts(): Promise<SchwabAccountOption[]> {
-    const url = `${this.baseUrl}/api/schwab/accounts`;
+    const url = `${this.baseUrl}/api/schwab/accounts/all`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
@@ -112,12 +116,29 @@ export class ApiClient {
         signal: controller.signal,
       });
 
-      if (!response.ok) {
-        return [];
+      if (response.ok) {
+        const raw = await response.json();
+        if (Array.isArray(raw) && raw.length > 0) {
+          return raw.map((a: any) => ({
+            accountNumber: a.accountNumber || '',
+            hashValue: a.hashValue || a.accountNumber || '',
+            nickName: a.nickName || undefined,
+            liquidationValue: Number(a.balances?.liquidationValue) || 0,
+          }));
+        }
       }
 
-      const accounts: Array<{ accountNumber: string; hashValue: string }> = await response.json();
-      return accounts;
+      // Fallback to basic accounts endpoint
+      const fallbackUrl = `${this.baseUrl}/api/schwab/accounts`;
+      const fallbackResp = await fetch(fallbackUrl, {
+        method: 'GET',
+        headers: this.getHeaders(),
+      });
+      if (fallbackResp.ok) {
+        const fallbackList: Array<{ accountNumber: string; hashValue: string }> = await fallbackResp.json();
+        return Array.isArray(fallbackList) ? fallbackList : [];
+      }
+      return [];
     } catch {
       return [];
     } finally {

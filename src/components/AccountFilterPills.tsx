@@ -43,6 +43,7 @@ export const AccountFilterPills: React.FC<Props> = ({
           const displayNum = acc.accountNumber.length > 4
             ? `...${acc.accountNumber.slice(-4)}`
             : acc.accountNumber;
+          const label = acc.nickName ? `${acc.nickName} (${displayNum})` : `#${displayNum}`;
 
           return (
             <TouchableOpacity
@@ -60,7 +61,7 @@ export const AccountFilterPills: React.FC<Props> = ({
                   isSelected && styles.pillTextActive,
                 ]}
               >
-                #{displayNum}
+                {label}
               </Text>
             </TouchableOpacity>
           );

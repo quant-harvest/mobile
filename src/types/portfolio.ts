@@ -21,6 +21,8 @@ export interface HoldingYieldSummary {
 
 export interface PortfolioYieldSummary {
   totalMarketValue: number;
+  totalLiquidationValue?: number;
+  totalCash?: number;
   totalCostBasis: number;
   totalUnrealizedPnL: number;
   totalUnrealizedPnLPct: number;
@@ -36,6 +38,8 @@ export interface PortfolioYieldSummary {
 export interface SchwabAccountOption {
   accountNumber: string;
   hashValue: string;
+  nickName?: string;
+  liquidationValue?: number;
 }
 
 export interface AppConfig {

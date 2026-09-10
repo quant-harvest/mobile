@@ -24,14 +24,23 @@ export const PortfolioHeader: React.FC<Props> = ({ summary, lastUpdated }) => {
   const netSign = isNetTotalProfit ? '+' : '';
   const netColor = isNetTotalProfit ? '#089981' : '#f23645';
 
+  const hasLiq = Boolean(summary.totalLiquidationValue && summary.totalLiquidationValue > 0);
+  const displayValue = hasLiq ? summary.totalLiquidationValue! : summary.totalMarketValue;
+
   return (
     <View style={styles.card}>
       <View style={styles.topRow}>
         <View>
-          <Text style={styles.label}>TOTAL PORTFOLIO VALUE</Text>
+          <Text style={styles.label}>{hasLiq ? 'NET LIQUIDATION VALUE' : 'TOTAL PORTFOLIO VALUE'}</Text>
           <Text style={styles.mainValue}>
-            ${summary.totalMarketValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            ${displayValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </Text>
+          {hasLiq && (
+            <Text style={styles.subDetailText}>
+              Holdings: ${summary.totalMarketValue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+              {summary.totalCash !== undefined && summary.totalCash !== 0 ? ` • Cash: $${summary.totalCash.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : ''}
+            </Text>
+          )}
         </View>
         <View style={[styles.pnlBadge, { backgroundColor: isProfit ? 'rgba(8,153,129,0.15)' : 'rgba(242,54,69,0.15)' }]}>
           <Text style={[styles.pnlText, { color: pnlColor }]}>
@@ -119,6 +128,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#f0f6fc',
     marginTop: 2,
+  },
+  subDetailText: {
+    fontSize: 11,
+    color: '#8b949e',
+    marginTop: 3,
+    fontWeight: '500',
   },
   pnlBadge: {
     paddingHorizontal: 10,
