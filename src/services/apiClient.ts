@@ -1,5 +1,6 @@
-import { PortfolioYieldSummary, HoldingYieldSummary, SchwabAccountOption } from '../types/portfolio';
+import { PortfolioYieldSummary, HoldingYieldSummary, SchwabAccountOption, MacroRibbon } from '../types/portfolio';
 import { StagedReentryOrder } from '../types/orders';
+
 
 export interface ApiClientConfig {
   baseUrl: string;
@@ -220,5 +221,46 @@ export class ApiClient {
       clearTimeout(timeoutId);
     }
   }
+
+  async fetchMacroRibbon(): Promise<MacroRibbon | null> {
+    const url = `${this.baseUrl}/api/macro/ribbon`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async fetchMacroEvaluation(): Promise<any | null> {
+    const url = `${this.baseUrl}/api/macro/evaluation`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 }
+
 

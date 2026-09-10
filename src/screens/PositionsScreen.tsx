@@ -11,8 +11,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { HoldingYieldSummary, PortfolioYieldSummary, SchwabAccountOption, AppConfig } from '../types/portfolio';
+import { HoldingYieldSummary, PortfolioYieldSummary, SchwabAccountOption, AppConfig, MacroRibbon } from '../types/portfolio';
 import { ApiClient } from '../services/apiClient';
+
 import { loadAppConfig } from '../storage/configStorage';
 import { PortfolioHeader } from '../components/PortfolioHeader';
 import { AccountFilterPills } from '../components/AccountFilterPills';
@@ -27,6 +28,7 @@ export const PositionsScreen: React.FC = () => {
   const [accounts, setAccounts] = useState<SchwabAccountOption[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<string>('ALL');
   const [summary, setSummary] = useState<PortfolioYieldSummary | null>(null);
+  const [macroRibbon, setMacroRibbon] = useState<MacroRibbon | null>(null);
   const [stagedOrders, setStagedOrders] = useState<StagedReentryOrder[]>([]);
   const [statusNotification, setStatusNotification] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -65,15 +67,19 @@ export const PositionsScreen: React.FC = () => {
 
       try {
         setErrorMsg(null);
-        const [accList, yieldData] = await Promise.all([
+        const [accList, yieldData, macroData] = await Promise.all([
           client.fetchAccounts(),
           client.fetchPortfolioYieldSummary(selectedAccount),
+          client.fetchMacroRibbon(),
         ]);
 
         if (accList.length > 0) {
           setAccounts(accList);
         }
         setSummary(yieldData);
+        if (macroData) {
+          setMacroRibbon(macroData);
+        }
         setLastUpdated(new Date());
       } catch (err: any) {
         console.warn('Error fetching portfolio data:', err);
@@ -82,6 +88,7 @@ export const PositionsScreen: React.FC = () => {
         setLoading(false);
         setRefreshing(false);
       }
+
     },
     [config, selectedAccount]
   );
@@ -272,8 +279,9 @@ export const PositionsScreen: React.FC = () => {
           )}
           ListHeaderComponent={
             <View>
-              <PortfolioHeader summary={summary} lastUpdated={lastUpdated} />
+              <PortfolioHeader summary={summary} macroRibbon={macroRibbon} lastUpdated={lastUpdated} />
               <AccountFilterPills
+
                 accounts={accounts}
                 selectedAccount={selectedAccount}
                 onSelectAccount={handleSelectAccount}

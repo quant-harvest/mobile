@@ -47,3 +47,18 @@ export interface AppConfig {
   apiKey: string;
   autoRefreshIntervalSec: number;
 }
+
+export interface MacroItem {
+  symbol: string;
+  label: string;
+  category: string;
+  lastPrice: number;
+  changePct: number;
+  changeDollar: number;
+}
+
+export interface MacroRibbon {
+  items: MacroItem[];
+  timestamp: number;
+}
+
