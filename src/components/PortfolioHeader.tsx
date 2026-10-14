@@ -17,12 +17,19 @@ export const PortfolioHeader: React.FC<Props> = ({ summary, macroRibbon, lastUpd
     );
   }
 
-  const isProfit = summary.totalUnrealizedPnL >= 0;
-  const pnlSign = isProfit ? '+' : '';
-  const pnlColor = isProfit ? '#089981' : '#f23645';
+  const hasDayPnL = summary.totalDayPnL !== undefined;
+  const primaryPnL = hasDayPnL ? summary.totalDayPnL! : summary.totalUnrealizedPnL;
+  const primaryPnLPct = hasDayPnL ? (summary.totalDayPnLPct || 0) : summary.totalUnrealizedPnLPct;
+  const isPrimaryProfit = primaryPnL >= 0;
+  const primarySign = isPrimaryProfit ? '+' : '-';
+  const primaryColor = isPrimaryProfit ? '#089981' : '#f23645';
+
+  const isUnrealizedProfit = summary.totalUnrealizedPnL >= 0;
+  const unrealizedSign = isUnrealizedProfit ? '+' : '-';
+  const unrealizedColor = isUnrealizedProfit ? '#089981' : '#f23645';
 
   const isNetTotalProfit = summary.netTotalReturn >= 0;
-  const netSign = isNetTotalProfit ? '+' : '';
+  const netSign = isNetTotalProfit ? '+' : '-';
   const netColor = isNetTotalProfit ? '#089981' : '#f23645';
 
   const hasLiq = Boolean(summary.totalLiquidationValue && summary.totalLiquidationValue > 0);
@@ -64,12 +71,13 @@ export const PortfolioHeader: React.FC<Props> = ({ summary, macroRibbon, lastUpd
             </Text>
           )}
         </View>
-        <View style={[styles.pnlBadge, { backgroundColor: isProfit ? 'rgba(8,153,129,0.15)' : 'rgba(242,54,69,0.15)' }]}>
-          <Text style={[styles.pnlText, { color: pnlColor }]}>
-            {pnlSign}${Math.abs(summary.totalUnrealizedPnL).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        <View style={[styles.pnlBadge, { backgroundColor: isPrimaryProfit ? 'rgba(8,153,129,0.15)' : 'rgba(242,54,69,0.15)' }]}>
+          <Text style={styles.pnlBadgeLabel}>{hasDayPnL ? 'DAY P&L' : 'ALL-TIME UNREALIZED'}</Text>
+          <Text style={[styles.pnlText, { color: primaryColor }]}>
+            {primarySign}${Math.abs(primaryPnL).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </Text>
-          <Text style={[styles.pnlSubText, { color: pnlColor }]}>
-            ({pnlSign}{summary.totalUnrealizedPnLPct.toFixed(1)}%)
+          <Text style={[styles.pnlSubText, { color: primaryColor }]}>
+            ({primarySign}{Math.abs(primaryPnLPct).toFixed(2)}%)
           </Text>
         </View>
       </View>
@@ -139,23 +147,23 @@ export const PortfolioHeader: React.FC<Props> = ({ summary, macroRibbon, lastUpd
 
       <View style={styles.subGrid}>
         <View style={styles.subCol}>
-          <Text style={styles.subLabel}>Yield on Cost:</Text>
-          <Text style={styles.subValue}>
-            {summary.portfolioYieldOnCost.toFixed(2)}%
+          <Text style={styles.subLabel}>All-Time Gain:</Text>
+          <Text style={[styles.subValue, { color: unrealizedColor }]}>
+            {unrealizedSign}${Math.abs(summary.totalUnrealizedPnL).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ({unrealizedSign}{Math.abs(summary.totalUnrealizedPnLPct).toFixed(1)}%)
           </Text>
         </View>
 
         <View style={styles.subCol}>
           <Text style={styles.subLabel}>Total Return:</Text>
           <Text style={[styles.subValue, { color: netColor }]}>
-            {netSign}${Math.abs(summary.netTotalReturn).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({netSign}{summary.netTotalReturnPct.toFixed(1)}%)
+            {netSign}${Math.abs(summary.netTotalReturn).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ({netSign}{Math.abs(summary.netTotalReturnPct).toFixed(1)}%)
           </Text>
         </View>
       </View>
 
       {lastUpdated && (
         <Text style={styles.timestamp}>
-          Updated: {lastUpdated.toLocaleTimeString()}
+          Yield on Cost: {summary.portfolioYieldOnCost.toFixed(2)}% • Updated: {lastUpdated.toLocaleTimeString()}
         </Text>
       )}
     </View>
@@ -201,6 +209,13 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 8,
     alignItems: 'flex-end',
+  },
+  pnlBadgeLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#8b949e',
+    letterSpacing: 0.5,
+    marginBottom: 2,
   },
   pnlText: {
     fontSize: 14,

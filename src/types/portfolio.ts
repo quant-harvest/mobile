@@ -7,6 +7,8 @@ export interface HoldingYieldSummary {
   costBasisPerShare: number;
   totalCostBasis: number;
   marketValue: number;
+  dayPnL?: number;
+  dayPnLPct?: number;
   unrealizedPnL: number;
   unrealizedPnLPct: number;
   totalDividends: number;
@@ -24,6 +26,8 @@ export interface PortfolioYieldSummary {
   totalLiquidationValue?: number;
   totalCash?: number;
   totalCostBasis: number;
+  totalDayPnL?: number;
+  totalDayPnLPct?: number;
   totalUnrealizedPnL: number;
   totalUnrealizedPnLPct: number;
   totalDividends: number;
