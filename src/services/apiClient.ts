@@ -45,38 +45,89 @@ export class ApiClient {
     const timeoutId = setTimeout(() => controller.abort(), 12000);
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: this.getHeaders(),
-        signal: controller.signal,
-      });
+      const [response, accountsResp] = await Promise.all([
+        fetch(url, {
+          method: 'GET',
+          headers: this.getHeaders(),
+          signal: controller.signal,
+        }),
+        fetch(`${this.baseUrl}/api/schwab/accounts/all`, {
+          method: 'GET',
+          headers: this.getHeaders(),
+          signal: controller.signal,
+        }).catch(() => null),
+      ]);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const raw = await response.json();
+      let rawAccounts: any[] = [];
+      if (accountsResp && accountsResp.ok) {
+        const parsedAccs = await accountsResp.json().catch(() => []);
+        if (Array.isArray(parsedAccs)) {
+          rawAccounts = parsedAccs;
+        }
+      }
 
-      const holdings: HoldingYieldSummary[] = (raw.holdings || []).map((h: any) => ({
-        symbol: h.symbol || '',
-        description: h.description || '',
-        accountNumber: h.accountNumber || '',
-        shares: Number(h.shares) || 0,
-        currentPrice: Number(h.currentPrice) || 0,
-        costBasisPerShare: Number(h.costBasisPerShare) || 0,
-        totalCostBasis: Number(h.totalCostBasis) || 0,
-        marketValue: Number(h.marketValue) || 0,
-        unrealizedPnL: Number(h.unrealizedPnL) || 0,
-        unrealizedPnLPct: Number(h.unrealizedPnLPct) || 0,
-        totalDividends: Number(h.totalDividends) || 0,
-        dividendCount: Number(h.dividendCount) || 0,
-        optionPremiumHarvested: Number(h.optionPremiumHarvested) || 0,
-        totalIncome: Number(h.totalIncome) || 0,
-        effectiveCostBasisPerShare: Number(h.effectiveCostBasisPerShare) || 0,
-        yieldOnCost: Number(h.yieldOnCostPct ?? h.yieldOnCost ?? 0),
-        netTotalReturn: Number(h.netTotalReturnDollar ?? h.netTotalReturn ?? 0),
-        netTotalReturnPct: Number(h.netTotalReturnPct) || 0,
-      }));
+      // Filter accounts if accountFilter is active
+      const filteredAccounts =
+        accountFilter && accountFilter !== 'ALL'
+          ? rawAccounts.filter((a: any) => a.accountNumber === accountFilter || a.hashValue === accountFilter)
+          : rawAccounts;
+
+      // Map (accountNumber, symbol) -> { dayPnL, dayPnLPct } for equity holdings, and sum totalDayPnL across all positions
+      const holdingDayMap = new Map<string, { dayPnL: number; dayPnLPct: number }>();
+      let totalDayPnL: number | undefined = undefined;
+      if (filteredAccounts.length > 0) {
+        let daySum = 0;
+        for (const acc of filteredAccounts) {
+          const accNum = (acc.accountNumber || '').trim();
+          const positions = Array.isArray(acc.positions) ? acc.positions : [];
+          for (const pos of positions) {
+            const posDayPnL = Number(pos.currentDayProfitLoss) || 0;
+            daySum += posDayPnL;
+            if (pos.assetType !== 'OPTION') {
+              const sym = (pos.symbol || '').trim().toUpperCase();
+              const prevVal = (Number(pos.marketValue) || 0) - posDayPnL;
+              const pct =
+                Number(pos.currentDayProfitLossPercentage) ||
+                (prevVal > 0 ? (posDayPnL / prevVal) * 100 : 0);
+              holdingDayMap.set(`${accNum}_${sym}`, { dayPnL: posDayPnL, dayPnLPct: pct });
+            }
+          }
+        }
+        totalDayPnL = daySum;
+      }
+
+      const holdings: HoldingYieldSummary[] = (raw.holdings || []).map((h: any) => {
+        const sym = (h.symbol || '').trim().toUpperCase();
+        const accNum = (h.accountNumber || '').trim();
+        const dayInfo = holdingDayMap.get(`${accNum}_${sym}`);
+        return {
+          symbol: h.symbol || '',
+          description: h.description || '',
+          accountNumber: h.accountNumber || '',
+          shares: Number(h.shares) || 0,
+          currentPrice: Number(h.currentPrice) || 0,
+          costBasisPerShare: Number(h.costBasisPerShare) || 0,
+          totalCostBasis: Number(h.totalCostBasis) || 0,
+          marketValue: Number(h.marketValue) || 0,
+          dayPnL: dayInfo?.dayPnL,
+          dayPnLPct: dayInfo?.dayPnLPct,
+          unrealizedPnL: Number(h.unrealizedPnL) || 0,
+          unrealizedPnLPct: Number(h.unrealizedPnLPct) || 0,
+          totalDividends: Number(h.totalDividends) || 0,
+          dividendCount: Number(h.dividendCount) || 0,
+          optionPremiumHarvested: Number(h.optionPremiumHarvested) || 0,
+          totalIncome: Number(h.totalIncome) || 0,
+          effectiveCostBasisPerShare: Number(h.effectiveCostBasisPerShare) || 0,
+          yieldOnCost: Number(h.yieldOnCostPct ?? h.yieldOnCost ?? 0),
+          netTotalReturn: Number(h.netTotalReturnDollar ?? h.netTotalReturn ?? 0),
+          netTotalReturnPct: Number(h.netTotalReturnPct) || 0,
+        };
+      });
 
       const totalCostBasis = Number(raw.totalCostBasis) || 0;
       const totalMarketValue = Number(raw.totalMarketValue) || 0;
@@ -84,6 +135,9 @@ export class ApiClient {
       const totalCash = Number(raw.totalCash) || 0;
       const totalUnrealizedPnL = Number(raw.unrealizedPricePnL ?? raw.totalUnrealizedPnL ?? 0);
       const totalUnrealizedPnLPct = totalCostBasis > 0 ? (totalUnrealizedPnL / totalCostBasis) * 100 : 0;
+      const baseForDayPct = (totalLiquidationValue > 0 ? totalLiquidationValue : totalMarketValue) - (totalDayPnL || 0);
+      const totalDayPnLPct =
+        totalDayPnL !== undefined && baseForDayPct > 0 ? (totalDayPnL / baseForDayPct) * 100 : undefined;
       const totalDividends = Number(raw.totalDividendsCollected ?? raw.totalDividends ?? 0);
       const totalOptionPremium = Number(raw.totalOptionPremiumCollected ?? raw.totalOptionPremium ?? 0);
       const totalIncome = Number(raw.totalIncomeCollected ?? raw.totalIncome ?? 0);
@@ -96,6 +150,8 @@ export class ApiClient {
         totalLiquidationValue,
         totalCash,
         totalCostBasis,
+        totalDayPnL,
+        totalDayPnLPct,
         totalUnrealizedPnL,
         totalUnrealizedPnLPct,
         totalDividends,

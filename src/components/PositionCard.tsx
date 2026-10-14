@@ -8,12 +8,19 @@ interface Props {
 }
 
 export const PositionCard: React.FC<Props> = ({ item, onPress }) => {
+  const hasDayPnL = item.dayPnL !== undefined;
+  const dayVal = hasDayPnL ? item.dayPnL! : 0;
+  const dayPct = hasDayPnL ? (item.dayPnLPct || 0) : 0;
+  const isDayGain = dayVal >= 0;
+  const daySign = isDayGain ? '+' : '-';
+  const dayColor = isDayGain ? '#089981' : '#f23645';
+
   const isCapitalGain = item.unrealizedPnL >= 0;
-  const capSign = isCapitalGain ? '+' : '';
+  const capSign = isCapitalGain ? '+' : '-';
   const capColor = isCapitalGain ? '#089981' : '#f23645';
 
   const isNetProfit = item.netTotalReturn >= 0;
-  const netSign = isNetProfit ? '+' : '';
+  const netSign = isNetProfit ? '+' : '-';
   const netColor = isNetProfit ? '#089981' : '#f23645';
 
   const hasDividends = item.totalDividends > 0;
@@ -37,9 +44,16 @@ export const PositionCard: React.FC<Props> = ({ item, onPress }) => {
           <Text style={styles.marketVal}>
             ${item.marketValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </Text>
-          <View style={[styles.capBadge, { backgroundColor: isCapitalGain ? 'rgba(8,153,129,0.12)' : 'rgba(242,54,69,0.12)' }]}>
+          {hasDayPnL && (
+            <View style={[styles.capBadge, { backgroundColor: isDayGain ? 'rgba(8,153,129,0.14)' : 'rgba(242,54,69,0.14)' }]}>
+              <Text style={[styles.capText, { color: dayColor }]}>
+                Day: {daySign}${Math.abs(dayVal).toFixed(2)} ({daySign}{Math.abs(dayPct).toFixed(1)}%)
+              </Text>
+            </View>
+          )}
+          <View style={[styles.capBadge, { backgroundColor: isCapitalGain ? 'rgba(8,153,129,0.08)' : 'rgba(242,54,69,0.08)' }]}>
             <Text style={[styles.capText, { color: capColor }]}>
-              {capSign}${Math.abs(item.unrealizedPnL).toFixed(2)} ({capSign}{item.unrealizedPnLPct.toFixed(1)}%)
+              All-Time: {capSign}${Math.abs(item.unrealizedPnL).toFixed(0)} ({capSign}{Math.abs(item.unrealizedPnLPct).toFixed(1)}%)
             </Text>
           </View>
         </View>
