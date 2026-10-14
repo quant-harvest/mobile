@@ -5,11 +5,6 @@ const STORAGE_KEY_SERVER_URL = '@quantharvest_server_url';
 const STORAGE_KEY_API_KEY = '@quantharvest_api_key';
 const STORAGE_KEY_REFRESH = '@quantharvest_refresh_interval';
 
-// Legacy WaveSkimmer keys for seamless migration
-const LEGACY_KEY_SERVER_URL = '@waveskimmer_server_url';
-const LEGACY_KEY_API_KEY = '@waveskimmer_api_key';
-const LEGACY_KEY_REFRESH = '@waveskimmer_refresh_interval';
-
 export const DEFAULT_CONFIG: AppConfig = {
   serverUrl: 'https://app.quantharvest.com',
   apiKey: '',
@@ -18,20 +13,16 @@ export const DEFAULT_CONFIG: AppConfig = {
 
 export async function loadAppConfig(): Promise<AppConfig> {
   try {
-    const [storedUrl, storedKey, storedInterval, legacyUrl, legacyKey, legacyInterval] = await Promise.all([
+    const [storedUrl, storedKey, storedInterval] = await Promise.all([
       AsyncStorage.getItem(STORAGE_KEY_SERVER_URL),
       AsyncStorage.getItem(STORAGE_KEY_API_KEY),
       AsyncStorage.getItem(STORAGE_KEY_REFRESH),
-      AsyncStorage.getItem(LEGACY_KEY_SERVER_URL),
-      AsyncStorage.getItem(LEGACY_KEY_API_KEY),
-      AsyncStorage.getItem(LEGACY_KEY_REFRESH),
     ]);
 
-    const candidateUrl = storedUrl || legacyUrl || DEFAULT_CONFIG.serverUrl;
-    // Automatically migrate retired WaveSkimmer port 8444 URL to QuantHarvest production
+    const candidateUrl = storedUrl || DEFAULT_CONFIG.serverUrl;
     const resolvedUrl = candidateUrl.includes(':8444') ? DEFAULT_CONFIG.serverUrl : candidateUrl;
-    const resolvedKey = storedKey ?? legacyKey ?? DEFAULT_CONFIG.apiKey;
-    const rawInterval = storedInterval ?? legacyInterval;
+    const resolvedKey = storedKey ?? DEFAULT_CONFIG.apiKey;
+    const rawInterval = storedInterval;
 
     return {
       serverUrl: resolvedUrl,
