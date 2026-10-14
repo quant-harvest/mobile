@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, Modal, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { AppConfig } from '../types/portfolio';
 import { saveAppConfig } from '../storage/configStorage';
@@ -10,10 +10,22 @@ interface Props {
   onSave: (updatedConfig: AppConfig) => void;
 }
 
+const HOST_PRESETS = [
+  { label: '☁️ Cloud Prod', url: 'https://app.quantharvest.com' },
+  { label: '🚀 Cloud Stage', url: 'https://qh-stage-xpb7l5xnsq-uk.a.run.app' },
+  { label: '💻 Mac LAN (:8080)', url: 'http://192.168.1.85:8080' },
+];
+
 export const SettingsModal: React.FC<Props> = ({ visible, config, onClose, onSave }) => {
   const [serverUrl, setServerUrl] = useState(config.serverUrl);
   const [apiKey, setApiKey] = useState(config.apiKey);
   const [refreshInterval, setRefreshInterval] = useState(config.autoRefreshIntervalSec.toString());
+
+  useEffect(() => {
+    setServerUrl(config.serverUrl);
+    setApiKey(config.apiKey);
+    setRefreshInterval(config.autoRefreshIntervalSec.toString());
+  }, [config, visible]);
 
   const handleSave = async () => {
     if (!serverUrl.trim()) {
@@ -21,7 +33,7 @@ export const SettingsModal: React.FC<Props> = ({ visible, config, onClose, onSav
       return;
     }
 
-    const interval = parseInt(refreshInterval, 10) || 15;
+    const interval = parseInt(refreshInterval, 10) || 10;
     const updated: AppConfig = {
       serverUrl: serverUrl.trim(),
       apiKey: apiKey.trim(),
@@ -43,36 +55,53 @@ export const SettingsModal: React.FC<Props> = ({ visible, config, onClose, onSav
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
           <View style={styles.header}>
-            <Text style={styles.title}>Server & Connection Settings</Text>
+            <Text style={styles.title}>QuantHarvest Connection</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
               <Text style={styles.closeText}>✕</Text>
             </TouchableOpacity>
           </View>
 
           <View style={styles.formGroup}>
-            <Text style={styles.label}>SCHWABSTER HOST / URL</Text>
+            <Text style={styles.label}>QUANTHARVEST HOST / URL</Text>
             <TextInput
               style={styles.input}
               value={serverUrl}
               onChangeText={setServerUrl}
-              placeholder="http://192.168.1.85:8444"
+              placeholder="https://app.quantharvest.com"
               placeholderTextColor="#484f58"
               autoCapitalize="none"
               autoCorrect={false}
             />
-            <Text style={styles.helpText}>
-              • Pixel (Wi-Fi): http://192.168.1.85:8444{'\n'}
-              • iOS Simulator: http://localhost:8444 or Tailscale IP
-            </Text>
+            <View style={styles.presetsRow}>
+              {HOST_PRESETS.map(p => (
+                <TouchableOpacity
+                  key={p.url}
+                  style={[
+                    styles.presetChip,
+                    serverUrl.trim() === p.url && styles.presetChipActive,
+                  ]}
+                  onPress={() => setServerUrl(p.url)}
+                >
+                  <Text
+                    style={[
+                      styles.presetChipText,
+                      serverUrl.trim() === p.url && styles.presetChipTextActive,
+                    ]}
+                  >
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
 
           <View style={styles.formGroup}>
-            <Text style={styles.label}>API KEY (OPTIONAL)</Text>
+            <Text style={styles.label}>API KEY (OPTIONAL FOR LAN DEV)</Text>
             <TextInput
               style={styles.input}
               value={apiKey}
               onChangeText={setApiKey}
-              placeholder="Leave empty if local dev bypass"
+              placeholder="Enter Cockpit API Key for Cloud Prod"
               placeholderTextColor="#484f58"
               autoCapitalize="none"
               autoCorrect={false}
@@ -86,7 +115,7 @@ export const SettingsModal: React.FC<Props> = ({ visible, config, onClose, onSav
               style={styles.input}
               value={refreshInterval}
               onChangeText={setRefreshInterval}
-              placeholder="15"
+              placeholder="10"
               placeholderTextColor="#484f58"
               keyboardType="numeric"
             />
@@ -159,11 +188,31 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#30363d',
   },
-  helpText: {
+  presetsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  presetChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: '#21262d',
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  presetChipActive: {
+    backgroundColor: 'rgba(56, 189, 248, 0.18)',
+    borderColor: '#38bdf8',
+  },
+  presetChipText: {
     fontSize: 11,
-    color: '#6e7681',
-    marginTop: 4,
-    lineHeight: 16,
+    fontWeight: '700',
+    color: '#8b949e',
+  },
+  presetChipTextActive: {
+    color: '#38bdf8',
   },
   btnRow: {
     flexDirection: 'row',
