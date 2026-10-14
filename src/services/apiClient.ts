@@ -1,6 +1,5 @@
 import { PortfolioYieldSummary, HoldingYieldSummary, SchwabAccountOption, MacroRibbon } from '../types/portfolio';
-import { StagedReentryOrder } from '../types/orders';
-
+import { StagedReentryOrder, UserUpdatesPayload } from '../types/orders';
 
 export interface ApiClientConfig {
   baseUrl: string;
@@ -14,6 +13,12 @@ export class ApiClient {
   constructor(config: ApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
     this.apiKey = config.apiKey;
+  }
+
+  public getWebSocketUrl(): string {
+    const wsBase = this.baseUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+    const authQ = this.apiKey && this.apiKey.trim().length > 0 ? `?key=${encodeURIComponent(this.apiKey.trim())}` : '';
+    return `${wsBase}/ws/cockpit${authQ}`;
   }
 
   private getHeaders(): Record<string, string> {
@@ -50,7 +55,6 @@ export class ApiClient {
 
       const raw = await response.json();
 
-      // Normalize fields to ensure compatibility
       const holdings: HoldingYieldSummary[] = (raw.holdings || []).map((h: any) => ({
         symbol: h.symbol || '',
         description: h.description || '',
@@ -129,7 +133,6 @@ export class ApiClient {
         }
       }
 
-      // Fallback to basic accounts endpoint
       const fallbackUrl = `${this.baseUrl}/api/schwab/accounts`;
       const fallbackResp = await fetch(fallbackUrl, {
         method: 'GET',
@@ -172,10 +175,15 @@ export class ApiClient {
     }
   }
 
-  async executeStagedReentry(order: StagedReentryOrder): Promise<{ success: boolean; message?: string }> {
+  async executeStagedReentry(
+    order: StagedReentryOrder,
+    customLimitPrice?: number
+  ): Promise<{ success: boolean; message?: string }> {
     const url = `${this.baseUrl}/api/reentry/execute`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const effectivePrice =
+      customLimitPrice && customLimitPrice > 0 ? customLimitPrice : order.suggestedStop;
 
     try {
       const response = await fetch(url, {
@@ -187,7 +195,8 @@ export class ApiClient {
           symbol: order.symbol,
           instruction: order.instruction,
           quantity: order.quantity,
-          stopPrice: order.suggestedStop,
+          stopPrice: effectivePrice,
+          limitPrice: effectivePrice,
         }),
         signal: controller.signal,
       });
@@ -222,6 +231,46 @@ export class ApiClient {
     }
   }
 
+  async fetchUserUpdates(): Promise<UserUpdatesPayload | null> {
+    const url = `${this.baseUrl}/api/updates/user`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async dismissUserUpdateItem(symbol: string): Promise<boolean> {
+    const url = `${this.baseUrl}/api/updates/dismiss-item`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ symbol }),
+        signal: controller.signal,
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async fetchMacroRibbon(): Promise<MacroRibbon | null> {
     const url = `${this.baseUrl}/api/macro/ribbon`;
     const controller = new AbortController();
@@ -241,26 +290,4 @@ export class ApiClient {
       clearTimeout(timeoutId);
     }
   }
-
-  async fetchMacroEvaluation(): Promise<any | null> {
-    const url = `${this.baseUrl}/api/macro/evaluation`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: this.getHeaders(),
-        signal: controller.signal,
-      });
-      if (!response.ok) return null;
-      return await response.json();
-    } catch {
-      return null;
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
 }
-
-

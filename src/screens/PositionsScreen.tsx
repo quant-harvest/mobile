@@ -9,18 +9,20 @@ import {
   StyleSheet,
   SafeAreaView,
   ActivityIndicator,
+  Modal,
+  ScrollView,
+  Vibration,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { HoldingYieldSummary, PortfolioYieldSummary, SchwabAccountOption, AppConfig, MacroRibbon } from '../types/portfolio';
 import { ApiClient } from '../services/apiClient';
-
 import { loadAppConfig } from '../storage/configStorage';
 import { PortfolioHeader } from '../components/PortfolioHeader';
 import { AccountFilterPills } from '../components/AccountFilterPills';
 import { PositionCard } from '../components/PositionCard';
 import { PositionDetailModal } from './PositionDetailModal';
 import { SettingsModal } from './SettingsModal';
-import { StagedReentryOrder } from '../types/orders';
+import { StagedReentryOrder, UserUpdatesPayload, UserUpdateItem } from '../types/orders';
 import { StagedTradeApprovalCard } from '../components/StagedTradeApprovalCard';
 
 export const PositionsScreen: React.FC = () => {
@@ -30,6 +32,10 @@ export const PositionsScreen: React.FC = () => {
   const [summary, setSummary] = useState<PortfolioYieldSummary | null>(null);
   const [macroRibbon, setMacroRibbon] = useState<MacroRibbon | null>(null);
   const [stagedOrders, setStagedOrders] = useState<StagedReentryOrder[]>([]);
+  const [userUpdates, setUserUpdates] = useState<UserUpdatesPayload | null>(null);
+  const [updatesModalVisible, setUpdatesModalVisible] = useState<boolean>(false);
+  const [activeAlertOrder, setActiveAlertOrder] = useState<StagedReentryOrder | null>(null);
+  const [alertBannerText, setAlertBannerText] = useState<string | null>(null);
   const [statusNotification, setStatusNotification] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -42,8 +48,9 @@ export const PositionsScreen: React.FC = () => {
   const apiClientRef = useRef<ApiClient | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const stagedTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const alertedOrderIdsRef = useRef<Set<string>>(new Set());
 
-  // Initialize Config & API Client
   useEffect(() => {
     loadAppConfig().then((loadedConfig) => {
       setConfig(loadedConfig);
@@ -55,22 +62,73 @@ export const PositionsScreen: React.FC = () => {
     });
   }, []);
 
+  const triggerStagedOrderAlert = useCallback((order: StagedReentryOrder) => {
+    if (!alertedOrderIdsRef.current.has(order.id)) {
+      alertedOrderIdsRef.current.add(order.id);
+      try {
+        Vibration.vibrate([0, 250, 120, 250]);
+      } catch {
+        // ignore vibration permission error on web/simulator
+      }
+      const isSellOpen =
+        order.instruction.toUpperCase().includes('SELL') &&
+        order.instruction.toUpperCase().includes('OPEN');
+      const priceLabel =
+        order.suggestedStop > 0 ? ` @ $${order.suggestedStop.toFixed(2)}` : '';
+      setAlertBannerText(
+        isSellOpen
+          ? `🏔️ Peak Exhaustion CC Staged: ${order.underlying} (${order.quantity}x ${order.symbol}${priceLabel}) — Tap for 1-Click`
+          : `⚡ 1-Click Order Staged: ${order.instruction} ${order.quantity}x ${order.symbol}${priceLabel} — Tap to Open`
+      );
+      setActiveAlertOrder(order);
+    }
+  }, []);
+
+  const fetchStagedAndUpdates = useCallback(async () => {
+    const client = apiClientRef.current;
+    if (!client) return;
+    try {
+      const [list, updatesData] = await Promise.all([
+        client.fetchStagedReentries(),
+        client.fetchUserUpdates(),
+      ]);
+      setStagedOrders(list);
+      if (updatesData) {
+        setUserUpdates(updatesData);
+      }
+      if (list.length > 0) {
+        // Trigger alert sheet on newest un-alerted staged order
+        const newestUnalerted = list.find(o => !alertedOrderIdsRef.current.has(o.id));
+        if (newestUnalerted) {
+          triggerStagedOrderAlert(newestUnalerted);
+        }
+      } else {
+        setActiveAlertOrder(null);
+      }
+    } catch {
+      // silent
+    }
+  }, [triggerStagedOrderAlert]);
+
   const fetchData = useCallback(
     async (currentConfig?: AppConfig) => {
       const activeConfig = currentConfig || config;
       if (!activeConfig) return;
 
-      const client = apiClientRef.current || new ApiClient({
-        baseUrl: activeConfig.serverUrl,
-        apiKey: activeConfig.apiKey,
-      });
+      const client =
+        apiClientRef.current ||
+        new ApiClient({
+          baseUrl: activeConfig.serverUrl,
+          apiKey: activeConfig.apiKey,
+        });
 
       try {
         setErrorMsg(null);
-        const [accList, yieldData, macroData] = await Promise.all([
+        const [accList, yieldData, macroData, updatesData] = await Promise.all([
           client.fetchAccounts(),
           client.fetchPortfolioYieldSummary(selectedAccount),
           client.fetchMacroRibbon(),
+          client.fetchUserUpdates(),
         ]);
 
         if (accList.length > 0) {
@@ -80,33 +138,87 @@ export const PositionsScreen: React.FC = () => {
         if (macroData) {
           setMacroRibbon(macroData);
         }
+        if (updatesData) {
+          setUserUpdates(updatesData);
+        }
         setLastUpdated(new Date());
       } catch (err: any) {
         console.warn('Error fetching portfolio data:', err);
-        setErrorMsg(err?.message || 'Failed to connect to Schwabster');
+        setErrorMsg(err?.message || 'Failed to connect to QuantHarvest');
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
-
     },
     [config, selectedAccount]
   );
 
-  // Handle Account Change
+  // Connect to QuantHarvest Cockpit WebSocket for instant STAGED_ORDER & SYSTEM_ALERT push
+  useEffect(() => {
+    if (!config || !apiClientRef.current) return;
+
+    let isMounted = true;
+    let reconnectTimeout: NodeJS.Timeout | null = null;
+
+    const connectWs = () => {
+      if (!isMounted || !apiClientRef.current) return;
+      try {
+        if (wsRef.current) {
+          wsRef.current.close();
+        }
+        const wsUrl = apiClientRef.current.getWebSocketUrl();
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onmessage = (evt) => {
+          try {
+            const payload = JSON.parse(evt.data);
+            if (payload.type === 'STAGED_ORDER' || payload.type === 'SYSTEM_ALERT') {
+              if (payload.type === 'SYSTEM_ALERT' && payload.title) {
+                setAlertBannerText(`${payload.title}: ${payload.message || ''}`);
+              }
+              fetchStagedAndUpdates();
+            }
+          } catch {
+            // ignore non-json frames
+          }
+        };
+
+        ws.onclose = () => {
+          if (isMounted) {
+            reconnectTimeout = setTimeout(connectWs, 5000);
+          }
+        };
+      } catch {
+        if (isMounted) {
+          reconnectTimeout = setTimeout(connectWs, 5000);
+        }
+      }
+    };
+
+    connectWs();
+
+    return () => {
+      isMounted = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [config, fetchStagedAndUpdates]);
+
   const handleSelectAccount = (acc: string) => {
     setSelectedAccount(acc);
     setLoading(true);
   };
 
-  // Re-fetch on account change
   useEffect(() => {
     if (config) {
       fetchData();
     }
   }, [selectedAccount]);
 
-  // Periodic Auto-Refresh
   useEffect(() => {
     if (!config || config.autoRefreshIntervalSec <= 0) return;
 
@@ -118,12 +230,13 @@ export const PositionsScreen: React.FC = () => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [config, selectedAccount]);
+  }, [config, selectedAccount, fetchData]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchData();
-  }, [fetchData]);
+    fetchStagedAndUpdates();
+  }, [fetchData, fetchStagedAndUpdates]);
 
   const handleSaveConfig = (updated: AppConfig) => {
     setConfig(updated);
@@ -133,46 +246,39 @@ export const PositionsScreen: React.FC = () => {
     });
     setLoading(true);
     fetchData(updated);
-    fetchStagedOrders();
+    fetchStagedAndUpdates();
   };
 
-  const fetchStagedOrders = useCallback(async () => {
-    const client = apiClientRef.current;
-    if (!client) return;
-    try {
-      const list = await client.fetchStagedReentries();
-      setStagedOrders(list);
-    } catch {
-      // silent
-    }
-  }, []);
-
-  // Poll staged orders every 4 seconds for immediate prompt display
   useEffect(() => {
     if (!config) return;
-    fetchStagedOrders();
+    fetchStagedAndUpdates();
     if (stagedTimerRef.current) clearInterval(stagedTimerRef.current);
     stagedTimerRef.current = setInterval(() => {
-      fetchStagedOrders();
+      fetchStagedAndUpdates();
     }, 4000);
 
     return () => {
       if (stagedTimerRef.current) clearInterval(stagedTimerRef.current);
     };
-  }, [config, fetchStagedOrders]);
+  }, [config, fetchStagedAndUpdates]);
 
-  const handleApproveStaged = async (order: StagedReentryOrder) => {
+  const handleApproveStaged = async (order: StagedReentryOrder, customLimitPrice?: number) => {
     const client = apiClientRef.current;
     if (!client) return;
     setStagedOrders(prev => prev.filter(o => o.id !== order.id));
-    setStatusNotification(`🚀 Executing ${order.instruction} x${order.quantity} ${order.symbol}...`);
+    setActiveAlertOrder(prev => (prev?.id === order.id ? null : prev));
+    setAlertBannerText(null);
+    const effPrice = customLimitPrice && customLimitPrice > 0 ? customLimitPrice : order.suggestedStop;
+    const priceSuffix = effPrice > 0 ? ` @ $${effPrice.toFixed(2)}` : '';
+    setStatusNotification(`⚡ Routing ${order.instruction} x${order.quantity} ${order.symbol}${priceSuffix}...`);
     try {
-      const res = await client.executeStagedReentry(order);
+      const res = await client.executeStagedReentry(order, customLimitPrice);
       if (res.success) {
-        setStatusNotification(`✅ Order Executed: ${order.instruction} x${order.quantity} ${order.symbol}`);
+        setStatusNotification(`✅ Executed: ${order.instruction} x${order.quantity} ${order.symbol}${priceSuffix}`);
         fetchData();
+        fetchStagedAndUpdates();
       } else {
-        setStatusNotification(`⚠️ Order placement: ${res.message || 'Submitted'}`);
+        setStatusNotification(`⚠️ Order response: ${res.message || 'Submitted'}`);
       }
     } catch (err: any) {
       setStatusNotification(`⚠️ Execution error: ${err?.message || 'Failed'}`);
@@ -184,21 +290,42 @@ export const PositionsScreen: React.FC = () => {
     const client = apiClientRef.current;
     if (!client) return;
     setStagedOrders(prev => prev.filter(o => o.id !== order.id));
-    setStatusNotification(`🛑 Vetoed: ${order.instruction} on ${order.underlying} dismissed`);
+    setActiveAlertOrder(prev => (prev?.id === order.id ? null : prev));
+    setAlertBannerText(null);
+    setStatusNotification(`🛑 Dismissed: ${order.instruction} on ${order.underlying}`);
     try {
       await client.dismissStagedReentry(order.id);
+      fetchStagedAndUpdates();
     } catch {
       // silent
     }
     setTimeout(() => setStatusNotification(null), 4000);
   };
 
-  // Filter Holdings by search query
+  const handleOpenUpdateOrder = (item: UserUpdateItem) => {
+    const sym = (item.symbol || '').trim().toUpperCase();
+    const matchingOrder =
+      stagedOrders.find(o => o.underlying.toUpperCase() === sym || o.symbol.toUpperCase().startsWith(sym)) ||
+      stagedOrders[0];
+    if (matchingOrder) {
+      setUpdatesModalVisible(false);
+      setActiveAlertOrder(matchingOrder);
+    }
+  };
+
+  const handleDismissUpdateItem = async (symbol?: string) => {
+    if (!symbol || !apiClientRef.current) return;
+    await apiClientRef.current.dismissUserUpdateItem(symbol);
+    fetchStagedAndUpdates();
+  };
+
   const filteredHoldings = (summary?.holdings || []).filter((h) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toUpperCase().trim();
     return h.symbol.toUpperCase().includes(q) || (h.description && h.description.toUpperCase().includes(q));
   });
+
+  const activeUpdatesCount = userUpdates?.events?.length || 0;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -207,11 +334,37 @@ export const PositionsScreen: React.FC = () => {
       {/* Top Navbar */}
       <View style={styles.navBar}>
         <View style={styles.navLeft}>
-          <Text style={styles.appTitle}>WaveSkimmer</Text>
+          <Text style={styles.appTitle}>QuantHarvest</Text>
           <View style={[styles.statusDot, { backgroundColor: errorMsg ? '#f23645' : '#089981' }]} />
         </View>
 
         <View style={styles.navRight}>
+          {stagedOrders.length > 0 && (
+            <TouchableOpacity
+              style={styles.stagedPillButton}
+              onPress={() => setActiveAlertOrder(stagedOrders[0])}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.stagedPillText}>⚡ 1-Click ({stagedOrders.length})</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={[
+              styles.updatesButton,
+              activeUpdatesCount > 0 && styles.updatesButtonActive,
+            ]}
+            onPress={() => setUpdatesModalVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.updatesButtonText,
+                activeUpdatesCount > 0 && styles.updatesButtonTextActive,
+              ]}
+            >
+              🔔 {activeUpdatesCount > 0 ? `Updates (${activeUpdatesCount})` : 'Updates'}
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.settingsButton}
             onPress={() => setSettingsVisible(true)}
@@ -222,11 +375,36 @@ export const PositionsScreen: React.FC = () => {
         </View>
       </View>
 
+      {/* Tap-to-Open Alert Banner */}
+      {alertBannerText ? (
+        <TouchableOpacity
+          style={styles.alertPopupBanner}
+          activeOpacity={0.8}
+          onPress={() => {
+            if (stagedOrders.length > 0) {
+              setActiveAlertOrder(stagedOrders[0]);
+            } else {
+              setUpdatesModalVisible(true);
+            }
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.alertPopupText}>{alertBannerText}</Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => setAlertBannerText(null)}
+            style={styles.alertDismissBtn}
+          >
+            <Text style={styles.alertDismissText}>✕</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      ) : null}
+
       {/* Search Bar */}
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search positions (e.g. XYZY, OBDC, AAPL)..."
+          placeholder="Search positions (e.g. GOOG, AMZN, NVDA, QQQ)..."
           placeholderTextColor="#484f58"
           value={searchQuery}
           onChangeText={setSearchQuery}
@@ -236,12 +414,11 @@ export const PositionsScreen: React.FC = () => {
         />
       </View>
 
-      {/* Pinned Real-time Trade Candidate Approvals (In Your Face Yes/No) */}
+      {/* Inline 1-Click Staged Trade Cards */}
       {stagedOrders.map((order) => (
         <StagedTradeApprovalCard
           key={order.id}
           order={order}
-          timeoutSec={30}
           onApprove={handleApproveStaged}
           onReject={handleRejectStaged}
         />
@@ -268,7 +445,7 @@ export const PositionsScreen: React.FC = () => {
       {loading && !refreshing ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#38bdf8" />
-          <Text style={styles.loadingSubtext}>Connecting to Schwabster...</Text>
+          <Text style={styles.loadingSubtext}>Connecting to QuantHarvest...</Text>
         </View>
       ) : (
         <FlatList
@@ -281,7 +458,6 @@ export const PositionsScreen: React.FC = () => {
             <View>
               <PortfolioHeader summary={summary} macroRibbon={macroRibbon} lastUpdated={lastUpdated} />
               <AccountFilterPills
-
                 accounts={accounts}
                 selectedAccount={selectedAccount}
                 onSelectAccount={handleSelectAccount}
@@ -311,6 +487,111 @@ export const PositionsScreen: React.FC = () => {
           contentContainerStyle={styles.listContent}
         />
       )}
+
+      {/* Alert-Triggered 1-Click Action Sheet Modal */}
+      <Modal
+        visible={!!activeAlertOrder}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setActiveAlertOrder(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.alertSheetContent}>
+            <View style={styles.alertSheetHeader}>
+              <Text style={styles.alertSheetTitle}>⚡ 1-Click Peak Exhaustion Co-Pilot</Text>
+              <TouchableOpacity
+                onPress={() => setActiveAlertOrder(null)}
+                style={styles.alertSheetCloseBtn}
+              >
+                <Text style={styles.alertSheetCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {activeAlertOrder ? (
+              <StagedTradeApprovalCard
+                order={activeAlertOrder}
+                onApprove={handleApproveStaged}
+                onReject={handleRejectStaged}
+              />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
+
+      {/* 🔔 User Updates Modal */}
+      <Modal
+        visible={updatesModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setUpdatesModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.updatesSheetContent}>
+            <View style={styles.alertSheetHeader}>
+              <Text style={styles.alertSheetTitle}>
+                🔔 Operational User Updates ({activeUpdatesCount})
+              </Text>
+              <TouchableOpacity
+                onPress={() => setUpdatesModalVisible(false)}
+                style={styles.alertSheetCloseBtn}
+              >
+                <Text style={styles.alertSheetCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.updatesSummaryText}>
+              {userUpdates?.summaryText || 'All fleet systems nominal.'}
+            </Text>
+            <ScrollView style={{ maxHeight: 460 }}>
+              {(userUpdates?.events || []).length === 0 ? (
+                <View style={styles.nominalBox}>
+                  <Text style={styles.nominalText}>
+                    ✓ Fleet Systems Nominal: No pending peak exhaustion alerts or macro blackouts.
+                  </Text>
+                </View>
+              ) : (
+                (userUpdates?.events || []).map((ev, idx) => {
+                  const isPeak = ev.category === 'CC_PEAK_EXHAUSTION';
+                  const isWarn = ev.severity === 'WARNING' || ev.severity === 'CRITICAL';
+                  return (
+                    <View
+                      key={`${ev.category}_${ev.symbol || idx}`}
+                      style={[
+                        styles.updateItemCard,
+                        isWarn && styles.updateItemCardWarn,
+                      ]}
+                    >
+                      <Text style={styles.updateItemTitle}>{ev.title}</Text>
+                      <Text style={styles.updateItemDetails}>{ev.details}</Text>
+                      {ev.actionableNotes ? (
+                        <Text style={styles.updateItemNote}>👉 {ev.actionableNotes}</Text>
+                      ) : null}
+                      <View style={styles.updateItemActions}>
+                        {isPeak && (
+                          <TouchableOpacity
+                            style={styles.updateOpen1ClickBtn}
+                            onPress={() => handleOpenUpdateOrder(ev)}
+                          >
+                            <Text style={styles.updateOpen1ClickText}>
+                              ⚡ Open 1-Click CC Ticket
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                        {ev.symbol && (
+                          <TouchableOpacity
+                            style={styles.updateDismissBtn}
+                            onPress={() => handleDismissUpdateItem(ev.symbol)}
+                          >
+                            <Text style={styles.updateDismissText}>✕ Dismiss</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* Position Detail Modal */}
       <PositionDetailModal
@@ -366,6 +647,40 @@ const styles = StyleSheet.create({
   navRight: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+  },
+  stagedPillButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+  },
+  stagedPillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#fbbf24',
+  },
+  updatesButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#161b22',
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  updatesButtonActive: {
+    backgroundColor: 'rgba(255, 152, 0, 0.16)',
+    borderColor: 'rgba(255, 152, 0, 0.5)',
+  },
+  updatesButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#90caf9',
+  },
+  updatesButtonTextActive: {
+    color: '#ffa726',
   },
   settingsButton: {
     padding: 6,
@@ -377,6 +692,32 @@ const styles = StyleSheet.create({
   settingsIcon: {
     fontSize: 16,
     color: '#8b949e',
+  },
+  alertPopupBanner: {
+    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+    borderWidth: 1.5,
+    borderColor: '#f59e0b',
+    marginHorizontal: 16,
+    marginTop: 8,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  alertPopupText: {
+    color: '#fef3c7',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  alertDismissBtn: {
+    padding: 4,
+  },
+  alertDismissText: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    fontWeight: '700',
   },
   searchContainer: {
     paddingHorizontal: 16,
@@ -461,5 +802,124 @@ const styles = StyleSheet.create({
     color: '#8b949e',
     fontSize: 14,
     textAlign: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'flex-end',
+  },
+  alertSheetContent: {
+    backgroundColor: '#0d1117',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 16,
+    paddingBottom: 28,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  updatesSheetContent: {
+    backgroundColor: '#161b22',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 18,
+    paddingBottom: 28,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  alertSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  alertSheetTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#f0f6fc',
+  },
+  alertSheetCloseBtn: {
+    padding: 6,
+  },
+  alertSheetCloseText: {
+    color: '#8b949e',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  updatesSummaryText: {
+    fontSize: 12,
+    color: '#8b949e',
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  nominalBox: {
+    backgroundColor: 'rgba(8, 153, 129, 0.1)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#089981',
+    padding: 12,
+    borderRadius: 6,
+  },
+  nominalText: {
+    color: '#a7f3d0',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  updateItemCard: {
+    backgroundColor: 'rgba(41, 98, 255, 0.1)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#2962ff',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 10,
+  },
+  updateItemCardWarn: {
+    backgroundColor: 'rgba(255, 152, 0, 0.12)',
+    borderLeftColor: '#ff9800',
+  },
+  updateItemTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#ffffff',
+    marginBottom: 4,
+  },
+  updateItemDetails: {
+    fontSize: 12,
+    color: '#cbd5e1',
+    lineHeight: 17,
+  },
+  updateItemNote: {
+    fontSize: 11,
+    color: '#fef08a',
+    fontWeight: '700',
+    marginTop: 6,
+  },
+  updateItemActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  updateOpen1ClickBtn: {
+    backgroundColor: '#2962ff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  updateOpen1ClickText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  updateDismissBtn: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: '#475569',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  updateDismissText: {
+    color: '#cbd5e1',
+    fontSize: 11,
+    fontWeight: '600',
   },
 });

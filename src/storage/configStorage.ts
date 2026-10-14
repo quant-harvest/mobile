@@ -1,29 +1,42 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppConfig } from '../types/portfolio';
 
-const STORAGE_KEY_SERVER_URL = '@waveskimmer_server_url';
-const STORAGE_KEY_API_KEY = '@waveskimmer_api_key';
-const STORAGE_KEY_REFRESH = '@waveskimmer_refresh_interval';
+const STORAGE_KEY_SERVER_URL = '@quantharvest_server_url';
+const STORAGE_KEY_API_KEY = '@quantharvest_api_key';
+const STORAGE_KEY_REFRESH = '@quantharvest_refresh_interval';
+
+// Legacy WaveSkimmer keys for seamless migration
+const LEGACY_KEY_SERVER_URL = '@waveskimmer_server_url';
+const LEGACY_KEY_API_KEY = '@waveskimmer_api_key';
+const LEGACY_KEY_REFRESH = '@waveskimmer_refresh_interval';
 
 export const DEFAULT_CONFIG: AppConfig = {
-  // Uses plain HTTP port 8444 on your Mac's Wi-Fi IP to avoid mobile self-signed SSL cert rejections
-  serverUrl: 'http://192.168.1.85:8444',
+  serverUrl: 'https://app.quantharvest.com',
   apiKey: '',
-  autoRefreshIntervalSec: 15,
+  autoRefreshIntervalSec: 10,
 };
 
 export async function loadAppConfig(): Promise<AppConfig> {
   try {
-    const [storedUrl, storedKey, storedInterval] = await Promise.all([
+    const [storedUrl, storedKey, storedInterval, legacyUrl, legacyKey, legacyInterval] = await Promise.all([
       AsyncStorage.getItem(STORAGE_KEY_SERVER_URL),
       AsyncStorage.getItem(STORAGE_KEY_API_KEY),
       AsyncStorage.getItem(STORAGE_KEY_REFRESH),
+      AsyncStorage.getItem(LEGACY_KEY_SERVER_URL),
+      AsyncStorage.getItem(LEGACY_KEY_API_KEY),
+      AsyncStorage.getItem(LEGACY_KEY_REFRESH),
     ]);
 
+    const candidateUrl = storedUrl || legacyUrl || DEFAULT_CONFIG.serverUrl;
+    // Automatically migrate retired WaveSkimmer port 8444 URL to QuantHarvest production
+    const resolvedUrl = candidateUrl.includes(':8444') ? DEFAULT_CONFIG.serverUrl : candidateUrl;
+    const resolvedKey = storedKey ?? legacyKey ?? DEFAULT_CONFIG.apiKey;
+    const rawInterval = storedInterval ?? legacyInterval;
+
     return {
-      serverUrl: storedUrl || DEFAULT_CONFIG.serverUrl,
-      apiKey: storedKey || DEFAULT_CONFIG.apiKey,
-      autoRefreshIntervalSec: storedInterval ? parseInt(storedInterval, 10) : DEFAULT_CONFIG.autoRefreshIntervalSec,
+      serverUrl: resolvedUrl,
+      apiKey: resolvedKey,
+      autoRefreshIntervalSec: rawInterval ? parseInt(rawInterval, 10) : DEFAULT_CONFIG.autoRefreshIntervalSec,
     };
   } catch (err) {
     console.warn('Failed to read config from storage, using defaults:', err);

@@ -1,62 +1,58 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { StagedReentryOrder } from '../types/orders';
 
 interface Props {
   order: StagedReentryOrder;
-  timeoutSec?: number;
-  onApprove: (order: StagedReentryOrder) => void;
+  ttlMinutes?: number;
+  onApprove: (order: StagedReentryOrder, customLimitPrice?: number) => void;
   onReject: (order: StagedReentryOrder) => void;
 }
 
 export const StagedTradeApprovalCard: React.FC<Props> = ({
   order,
-  timeoutSec = 30,
+  ttlMinutes = 10,
   onApprove,
   onReject,
 }) => {
-  const [timeLeft, setTimeLeft] = useState(timeoutSec);
+  const isSellOpen =
+    order.instruction.toUpperCase().includes('SELL') &&
+    order.instruction.toUpperCase().includes('OPEN');
+  const isSell = order.instruction.toUpperCase().includes('SELL');
+
+  const initialPrice = order.suggestedStop > 0 ? order.suggestedStop : 0;
+  const [customLimitPrice, setCustomLimitPrice] = useState<number>(initialPrice);
   const [isProcessing, setIsProcessing] = useState(false);
-  const progressAnim = useRef(new Animated.Value(1)).current;
+  const [elapsedMins, setElapsedMins] = useState<number>(0);
 
-  // Countdown timer with auto-approval on expiration
   useEffect(() => {
-    setTimeLeft(timeoutSec);
-    progressAnim.setValue(1);
+    setCustomLimitPrice(order.suggestedStop > 0 ? order.suggestedStop : 0);
+    setIsProcessing(false);
+  }, [order.id, order.suggestedStop]);
 
-    Animated.timing(progressAnim, {
-      toValue: 0,
-      duration: timeoutSec * 1000,
-      useNativeDriver: false,
-    }).start();
-
-    const interval = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          handleAutoApprove();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => {
-      clearInterval(interval);
-      progressAnim.stopAnimation();
+  // Passive TTL age display ONLY — strictly NEVER auto-executes without operator tap
+  useEffect(() => {
+    const updateAge = () => {
+      if (order.timestamp > 0) {
+        setElapsedMins(Math.max(0, Math.floor((Date.now() - order.timestamp) / 60000)));
+      }
     };
-  }, [order.id, timeoutSec]);
+    updateAge();
+    const interval = setInterval(updateAge, 15000);
+    return () => clearInterval(interval);
+  }, [order.timestamp]);
 
-  const handleAutoApprove = () => {
-    if (isProcessing) return;
-    setIsProcessing(true);
-    onApprove(order);
+  const nudgeLimitPrice = (delta: number) => {
+    setCustomLimitPrice(prev => {
+      const base = prev > 0 ? prev : order.suggestedStop;
+      return Math.max(0.05, Math.round((base + delta) * 100) / 100);
+    });
   };
 
   const handleManualApprove = () => {
     if (isProcessing) return;
     setIsProcessing(true);
-    onApprove(order);
+    onApprove(order, customLimitPrice > 0 ? customLimitPrice : undefined);
   };
 
   const handleReject = () => {
@@ -65,31 +61,26 @@ export const StagedTradeApprovalCard: React.FC<Props> = ({
     onReject(order);
   };
 
-  const isSell = order.instruction.toUpperCase().includes('SELL');
   const actionColor = isSell ? '#f59e0b' : '#00e676';
-  const progressWidth = progressAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0%', '100%'],
-  });
+  const minsLeft = Math.max(0, ttlMinutes - elapsedMins);
+  const totalCreditDollars =
+    isSellOpen && customLimitPrice > 0 ? Math.round(customLimitPrice * order.quantity * 100) : 0;
 
   return (
-    <View style={styles.cardContainer}>
-      {/* Top Header with Alert Icon & Countdown Badge */}
+    <View style={[styles.cardContainer, isSellOpen && styles.cardContainerCcPeak]}>
+      {/* Top Header with Alert Icon & Passive TTL Badge */}
       <View style={styles.headerRow}>
         <View style={styles.alertBadge}>
-          <Text style={styles.alertIcon}>⚡</Text>
-          <Text style={styles.alertTitle}>TRADE ENTRY CANDIDATE</Text>
-        </View>
-        <View style={[styles.timerBadge, timeLeft <= 10 && styles.timerBadgeUrgent]}>
-          <Text style={[styles.timerText, timeLeft <= 10 && styles.timerTextUrgent]}>
-            ⏳ Auto-YES: {timeLeft}s
+          <Text style={styles.alertIcon}>{isSellOpen ? '🏔️' : '⚡'}</Text>
+          <Text style={[styles.alertTitle, isSellOpen && { color: '#fbbf24' }]}>
+            {isSellOpen ? 'PEAK EXHAUSTION 1-CLICK CC' : '1-CLICK STAGED ORDER'}
           </Text>
         </View>
-      </View>
-
-      {/* Animated Timeout Progress Bar */}
-      <View style={styles.progressBarBackground}>
-        <Animated.View style={[styles.progressBarFill, { width: progressWidth }]} />
+        <View style={styles.timerBadge}>
+          <Text style={styles.timerText}>
+            ⏱️ {elapsedMins}m ago ({minsLeft}m TTL)
+          </Text>
+        </View>
       </View>
 
       {/* Main Order Details */}
@@ -115,17 +106,20 @@ export const StagedTradeApprovalCard: React.FC<Props> = ({
           </View>
           {order.underlyingPrice > 0 ? (
             <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>STOCK PRICE</Text>
+              <Text style={styles.metricLabel}>SPOT PRICE</Text>
               <Text style={styles.metricValue}>
                 ${order.underlyingPrice.toFixed(2)}
               </Text>
             </View>
           ) : null}
-          {order.suggestedStop > 0 ? (
+          {customLimitPrice > 0 ? (
             <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>SUGGESTED STOP</Text>
-              <Text style={styles.metricValue}>
-                ${order.suggestedStop.toFixed(2)}
+              <Text style={styles.metricLabel}>
+                {isSellOpen ? 'EST. CREDIT' : 'LIMIT / STOP'}
+              </Text>
+              <Text style={[styles.metricValue, isSellOpen && { color: '#38bdf8' }]}>
+                ${customLimitPrice.toFixed(2)}
+                {totalCreditDollars > 0 ? ` ($${totalCreditDollars})` : ''}
               </Text>
             </View>
           ) : null}
@@ -135,17 +129,41 @@ export const StagedTradeApprovalCard: React.FC<Props> = ({
           </View>
         </View>
 
-        {/* Reason / Setup Rationale */}
+        {/* Interactive Limit Price Stepper for 1-Click Fine-Tuning */}
+        {customLimitPrice > 0 && (
+          <View style={styles.stepperRow}>
+            <Text style={styles.stepperLabel}>Limit Credit / Price:</Text>
+            <View style={styles.stepperControls}>
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() => nudgeLimitPrice(-0.05)}
+                disabled={isProcessing}
+              >
+                <Text style={styles.stepperBtnText}>− $0.05</Text>
+              </TouchableOpacity>
+              <Text style={styles.stepperPriceText}>${customLimitPrice.toFixed(2)}</Text>
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() => nudgeLimitPrice(0.05)}
+                disabled={isProcessing}
+              >
+                <Text style={styles.stepperBtnText}>+ $0.05</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* Reason / Peak Exhaustion + KER Telemetry */}
         {order.reason ? (
           <View style={styles.reasonBox}>
-            <Text style={styles.reasonText} numberOfLines={2}>
+            <Text style={styles.reasonText} numberOfLines={3}>
               💡 {order.reason}
             </Text>
           </View>
         ) : null}
       </View>
 
-      {/* Big Tactile Yes / No Buttons */}
+      {/* Big Tactile 1-Click Execute / Dismiss Buttons (Manual Only) */}
       <View style={styles.buttonRow}>
         <TouchableOpacity
           style={[styles.actionBtn, styles.rejectBtn, isProcessing && styles.btnDisabled]}
@@ -153,8 +171,8 @@ export const StagedTradeApprovalCard: React.FC<Props> = ({
           disabled={isProcessing}
           activeOpacity={0.7}
         >
-          <Text style={styles.rejectBtnText}>🛑 NO / VETO</Text>
-          <Text style={styles.subBtnText}>Dismiss trade</Text>
+          <Text style={styles.rejectBtnText}>🛑 DISMISS</Text>
+          <Text style={styles.subBtnText}>Skip signal</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -163,8 +181,14 @@ export const StagedTradeApprovalCard: React.FC<Props> = ({
           disabled={isProcessing}
           activeOpacity={0.7}
         >
-          <Text style={styles.approveBtnText}>🚀 YES / EXECUTE</Text>
-          <Text style={styles.subBtnText}>Execute now</Text>
+          <Text style={styles.approveBtnText}>
+            {isSellOpen ? '⚡ 1-CLICK SELL CC' : '🚀 1-CLICK EXECUTE'}
+          </Text>
+          <Text style={styles.subBtnText}>
+            {customLimitPrice > 0
+              ? `Route @ $${customLimitPrice.toFixed(2)}${totalCreditDollars > 0 ? ` ($${totalCreditDollars})` : ''}`
+              : 'Execute now'}
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -186,6 +210,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 8,
   },
+  cardContainerCcPeak: {
+    borderColor: '#f59e0b',
+    shadowColor: '#f59e0b',
+  },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -204,39 +232,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#60a5fa',
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
   timerBadge: {
-    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+    backgroundColor: 'rgba(148, 163, 184, 0.16)',
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.5)',
-    paddingHorizontal: 10,
+    borderColor: 'rgba(148, 163, 184, 0.35)',
+    paddingHorizontal: 9,
     paddingVertical: 4,
     borderRadius: 12,
   },
-  timerBadgeUrgent: {
-    backgroundColor: 'rgba(239, 68, 68, 0.25)',
-    borderColor: '#ef4444',
-  },
   timerText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
-    color: '#93c5fd',
-  },
-  timerTextUrgent: {
-    color: '#f87171',
-  },
-  progressBarBackground: {
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginBottom: 12,
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#3b82f6',
-    borderRadius: 2,
+    color: '#cbd5e1',
   },
   bodyContent: {
     marginBottom: 14,
@@ -294,12 +303,54 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#f1f5f9',
   },
+  stepperRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  stepperLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94a3b8',
+  },
+  stepperControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  stepperBtn: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#475569',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  stepperBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#38bdf8',
+  },
+  stepperPriceText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#f8fafc',
+    minWidth: 52,
+    textAlign: 'center',
+  },
   reasonBox: {
     backgroundColor: 'rgba(30, 41, 59, 0.8)',
     borderRadius: 6,
     padding: 8,
     borderLeftWidth: 3,
-    borderLeftColor: '#38bdf8',
+    borderLeftColor: '#f59e0b',
   },
   reasonText: {
     fontSize: 11,
@@ -323,9 +374,9 @@ const styles = StyleSheet.create({
     borderColor: '#ef4444',
   },
   approveBtn: {
-    backgroundColor: '#089981',
+    backgroundColor: '#2962ff',
     borderWidth: 1.5,
-    borderColor: '#10b981',
+    borderColor: '#60a5fa',
   },
   btnDisabled: {
     opacity: 0.5,
@@ -345,6 +396,6 @@ const styles = StyleSheet.create({
   subBtnText: {
     fontSize: 10,
     color: '#cbd5e1',
-    opacity: 0.8,
+    opacity: 0.85,
   },
 });
