@@ -7,12 +7,14 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ActivityIndicator,
   Modal,
   ScrollView,
   Vibration,
+  Platform,
+  StatusBar as RNStatusBar,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { HoldingYieldSummary, PortfolioYieldSummary, SchwabAccountOption, AppConfig, MacroRibbon } from '../types/portfolio';
 import { ApiClient } from '../services/apiClient';
@@ -326,9 +328,14 @@ export const PositionsScreen: React.FC = () => {
   });
 
   const activeUpdatesCount = userUpdates?.events?.length || 0;
+  const insets = useSafeAreaInsets();
+  const topSafePadding = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? (RNStatusBar.currentHeight || 28) + 6 : 0
+  );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, { paddingTop: topSafePadding }]} edges={['left', 'right', 'bottom']}>
       <StatusBar style="light" />
 
       {/* Top Navbar */}

@@ -7,7 +7,7 @@ const STORAGE_KEY_REFRESH = '@quantharvest_refresh_interval';
 
 export const DEFAULT_CONFIG: AppConfig = {
   serverUrl: 'https://app.quantharvest.com',
-  apiKey: '',
+  apiKey: 'qh_sec_9e2b7a4f6d1c8e3a5b0f4d7e2a9c1b8f',
   autoRefreshIntervalSec: 10,
 };
 
@@ -21,7 +21,7 @@ export async function loadAppConfig(): Promise<AppConfig> {
 
     const candidateUrl = storedUrl || DEFAULT_CONFIG.serverUrl;
     const resolvedUrl = candidateUrl.includes(':8444') ? DEFAULT_CONFIG.serverUrl : candidateUrl;
-    const resolvedKey = storedKey ?? DEFAULT_CONFIG.apiKey;
+    const resolvedKey = storedKey && storedKey.trim().length > 0 ? storedKey.trim() : DEFAULT_CONFIG.apiKey;
     const rawInterval = storedInterval;
 
     return {
