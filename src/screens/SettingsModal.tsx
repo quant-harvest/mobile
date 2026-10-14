@@ -12,8 +12,8 @@ interface Props {
 
 const HOST_PRESETS = [
   { label: '☁️ Cloud Prod', url: 'https://app.quantharvest.com' },
-  { label: '💻 Local (:8080)', url: 'http://192.168.1.85:8080' },
-  { label: '🧪 Session (:8022)', url: 'http://192.168.1.85:8022' },
+  { label: '🚀 Cloud Stage', url: 'https://qh-stage-xpb7l5xnsq-uk.a.run.app' },
+  { label: '💻 Mac LAN (:8080)', url: 'http://192.168.1.85:8080' },
 ];
 
 export const SettingsModal: React.FC<Props> = ({ visible, config, onClose, onSave }) => {
