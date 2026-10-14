@@ -1,6 +1,8 @@
 import { PortfolioYieldSummary, HoldingYieldSummary, SchwabAccountOption, MacroRibbon } from '../types/portfolio';
 import { StagedReentryOrder, UserUpdatesPayload } from '../types/orders';
 
+const DEFAULT_API_KEY = 'qh_sec_9e2b7a4f6d1c8e3a5b0f4d7e2a9c1b8f';
+
 export interface ApiClientConfig {
   baseUrl: string;
   apiKey?: string;
@@ -12,12 +14,13 @@ export class ApiClient {
 
   constructor(config: ApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
-    this.apiKey = config.apiKey;
+    this.apiKey = config.apiKey && config.apiKey.trim().length > 0 ? config.apiKey.trim() : DEFAULT_API_KEY;
   }
 
   public getWebSocketUrl(): string {
     const wsBase = this.baseUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
-    const authQ = this.apiKey && this.apiKey.trim().length > 0 ? `?key=${encodeURIComponent(this.apiKey.trim())}` : '';
+    const key = (this.apiKey && this.apiKey.trim().length > 0) ? this.apiKey.trim() : DEFAULT_API_KEY;
+    const authQ = `?key=${encodeURIComponent(key)}`;
     return `${wsBase}/ws/cockpit${authQ}`;
   }
 
@@ -26,10 +29,9 @@ export class ApiClient {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
     };
-    if (this.apiKey && this.apiKey.trim().length > 0) {
-      headers['X-API-Key'] = this.apiKey.trim();
-      headers['Authorization'] = `Bearer ${this.apiKey.trim()}`;
-    }
+    const key = (this.apiKey && this.apiKey.trim().length > 0) ? this.apiKey.trim() : DEFAULT_API_KEY;
+    headers['X-API-Key'] = key;
+    headers['Authorization'] = `Bearer ${key}`;
     return headers;
   }
 
